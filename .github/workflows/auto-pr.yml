@@ -1,0 +1,71 @@
+name: Auto Create Pull Request
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'release/**'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  auto-pr:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Target Branch
+        id: target
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [[ "$BRANCH" == feature/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
+            echo "target=develop" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == hotfix/* ]] || [[ "$BRANCH" == release/* ]]; then
+            echo "target=master" >> $GITHUB_OUTPUT
+          else
+            echo "target=develop" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if Target Branch Exists
+        id: check-branch
+        run: |
+          if git show-ref --verify --quiet refs/heads/${{ steps.target.outputs.target }}; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Target branch '${{ steps.target.outputs.target }}' exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Target branch '${{ steps.target.outputs.target }}' doesn't exist yet"
+          fi
+
+      - name: Create PR (if target exists)
+        if: steps.check-branch.outputs.exists == 'true'
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: ${{ steps.target.outputs.target }}
+          pr_title: "${{ startsWith(github.ref, 'refs/heads/feature/') && 'Feature' || startsWith(github.ref, 'refs/heads/bugfix/') && 'Bugfix' || startsWith(github.ref, 'refs/heads/hotfix/') && 'Hotfix' || 'Release' }}: ${{ github.ref_name }}"
+          pr_body: |
+            ## Automated PR
+            
+            Branch: `${{ github.ref_name }}` → `${{ steps.target.outputs.target }}`
+            
+            ### Changes
+            $(git log origin/${{ steps.target.outputs.target }}..HEAD --pretty=format:"- %s" 2>/dev/null || echo "New branch, no comparison available")
+            
+            ### Checklist
+            - [ ] Code follows project standards
+            - [ ] Tests added/updated
+            - [ ] Documentation updated
+            - [ ] No breaking changes
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip PR (target doesn't exist)
+        if: steps.check-branch.outputs.exists == 'false'
+        run: |
+          echo "Skipping PR creation - target branch doesn't exist yet"
+          echo "This is normal for new projects"

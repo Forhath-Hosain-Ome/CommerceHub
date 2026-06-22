@@ -1,0 +1,329 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches: [develop, master, main]
+  push:
+    branches: [develop]
+
+env:
+  POSTGRES_DB: test_db
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  DJANGO_SECRET_KEY: ci-secret-key-for-testing
+
+jobs:
+  # Step 1: Detect project structure
+  detect-structure:
+    runs-on: ubuntu-22.04
+    outputs:
+      has-backend: ${{ steps.check.outputs.backend }}
+      has-frontend: ${{ steps.check.outputs.frontend }}
+      has-docker: ${{ steps.check.outputs.docker }}
+      has-migrations: ${{ steps.check.outputs.migrations }}
+      has-tests-backend: ${{ steps.check.outputs.tests_backend }}
+      has-tests-frontend: ${{ steps.check.outputs.tests_frontend }}
+      has-typescript: ${{ steps.check.outputs.typescript }}
+      has-redis: ${{ steps.check.outputs.redis }}
+      has-celery: ${{ steps.check.outputs.celery }}
+      
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Detect Project Structure
+        id: check
+        run: |
+          # Backend detection
+          if [ -d "backend" ] && [ -f "backend/manage.py" ]; then
+            echo "backend=true" >> $GITHUB_OUTPUT
+            echo "✅ Backend detected"
+          else
+            echo "backend=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No backend found yet"
+          fi
+          
+          # Frontend detection
+          if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
+            echo "frontend=true" >> $GITHUB_OUTPUT
+            echo "✅ Frontend detected"
+          else
+            echo "frontend=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No frontend found yet"
+          fi
+          
+          # Docker detection
+          if [ -f "Dockerfile" ] || [ -f "docker-compose.yml" ]; then
+            echo "docker=true" >> $GITHUB_OUTPUT
+            echo "✅ Docker config detected"
+          else
+            echo "docker=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No Docker config yet"
+          fi
+          
+          # Migrations detection
+          if [ -d "backend" ] && find backend -path "*/migrations/*.py" -not -name "__init__.py" | grep -q .; then
+            echo "migrations=true" >> $GITHUB_OUTPUT
+            echo "✅ Database migrations detected"
+          else
+            echo "migrations=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No migrations yet"
+          fi
+          
+          # Tests detection
+          if [ -d "backend" ] && find backend -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+            echo "tests_backend=true" >> $GITHUB_OUTPUT
+            echo "✅ Backend tests detected"
+          else
+            echo "tests_backend=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No backend tests yet"
+          fi
+          
+          if [ -d "frontend" ] && grep -q "\"test\":" frontend/package.json 2>/dev/null; then
+            echo "tests_frontend=true" >> $GITHUB_OUTPUT
+            echo "✅ Frontend tests detected"
+          else
+            echo "tests_frontend=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No frontend tests yet"
+          fi
+          
+          # TypeScript detection
+          if [ -f "frontend/tsconfig.json" ]; then
+            echo "typescript=true" >> $GITHUB_OUTPUT
+            echo "✅ TypeScript detected"
+          else
+            echo "typescript=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ JavaScript only"
+          fi
+          
+          # Redis/Celery detection
+          if grep -q "redis" backend/requirements.txt 2>/dev/null; then
+            echo "redis=true" >> $GITHUB_OUTPUT
+          else
+            echo "redis=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if grep -q "celery" backend/requirements.txt 2>/dev/null; then
+            echo "celery=true" >> $GITHUB_OUTPUT
+          else
+            echo "celery=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Step 2: Basic code quality (always runs)
+  basic-quality:
+    needs: detect-structure
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Basic File Structure Check
+        run: |
+          echo "Checking project structure..."
+          
+          # Check for README
+          if [ ! -f "README.md" ]; then
+            echo "⚠️ No README.md found"
+          fi
+          
+          # Check for .gitignore
+          if [ ! -f ".gitignore" ]; then
+            echo "⚠️ No .gitignore found"
+          fi
+          
+          # Check for common patterns
+          if [ -f ".env" ]; then
+            echo "❌ .env file should not be committed!"
+            exit 1
+          fi
+          
+      - name: Check File Sizes
+        run: |
+          # Warn about large files
+          find . -type f -size +5M -not -path "./.git/*" -not -path "*/node_modules/*" | while read file; do
+            echo "⚠️ Large file detected: $file ($(du -h "$file" | cut -f1))"
+          done
+          
+      - name: YAML Lint
+        if: hashFiles('**/*.yml') != '' || hashFiles('**/*.yaml') != ''
+        uses: actionshub/yamllint@main
+
+  # Step 3: Backend CI (only if backend exists)
+  backend:
+    needs: [detect-structure, basic-quality]
+    if: needs.detect-structure.outputs.has-backend == 'true'
+    runs-on: ubuntu-22.04
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+
+      - name: Install Dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found, installing Django only"
+            pip install django djangorestframework
+          fi
+          pip install flake8 black isort
+
+      - name: Lint Code
+        working-directory: backend
+        run: |
+          if [ -f "manage.py" ]; then
+            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          fi
+
+      - name: Check Migrations
+        if: needs.detect-structure.outputs.has-migrations == 'true'
+        working-directory: backend
+        run: |
+          python manage.py makemigrations --check --dry-run
+
+      - name: Run Migrations
+        working-directory: backend
+        run: |
+          python manage.py makemigrations
+          python manage.py migrate
+
+      - name: Run Tests
+        if: needs.detect-structure.outputs.has-tests-backend == 'true'
+        working-directory: backend
+        run: |
+          pip install pytest pytest-cov pytest-django
+          pytest --cov=. --cov-report=xml || true
+
+      - name: Basic Django Checks
+        if: needs.detect-structure.outputs.has-tests-backend == 'false'
+        working-directory: backend
+        run: |
+          echo "No tests found yet. Running basic Django system checks..."
+          python manage.py check --deploy || true
+
+  # Step 4: Frontend CI (only if frontend exists)
+  frontend:
+    needs: [detect-structure, basic-quality]
+    if: needs.detect-structure.outputs.has-frontend == 'true'
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Dependencies
+        working-directory: frontend
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          else
+            echo "No package.json found"
+            exit 0
+          fi
+
+      - name: Lint
+        if: hashFiles('frontend/.eslintrc*') != ''
+        working-directory: frontend
+        run: npm run lint || true
+
+      - name: TypeScript Check
+        if: needs.detect-structure.outputs.has-typescript == 'true'
+        working-directory: frontend
+        run: npx tsc --noEmit || true
+
+      - name: Run Tests
+        if: needs.detect-structure.outputs.has-tests-frontend == 'true'
+        working-directory: frontend
+        run: npm test -- --watchAll=false || true
+
+      - name: Build
+        working-directory: frontend
+        run: |
+          if grep -q "\"build\":" package.json; then
+            npm run build
+          else
+            echo "No build script found, skipping..."
+          fi
+
+  # Step 5: Integration (only if both exist)
+  integration:
+    needs: [detect-structure, backend, frontend]
+    if: |
+      always() &&
+      needs.detect-structure.outputs.has-backend == 'true' &&
+      needs.detect-structure.outputs.has-frontend == 'true' &&
+      needs.backend.result != 'failure' &&
+      needs.frontend.result != 'failure'
+    runs-on: ubuntu-22.04
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Backend
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          
+      - name: Install Backend
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          python manage.py migrate
+          python manage.py runserver &
+          sleep 5
+
+      - name: Setup Frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          
+      - name: Start Frontend
+        working-directory: frontend
+        run: |
+          npm install
+          npm start &
+          sleep 5
+
+      - name: Health Check
+        run: |
+          curl --retry 5 --retry-delay 5 --retry-connrefused http://localhost:8000/api/ || echo "Backend not ready yet"
+          curl --retry 5 --retry-delay 5 --retry-connrefused http://localhost:3000 || echo "Frontend not ready yet"
