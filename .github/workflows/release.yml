@@ -1,7 +1,7 @@
 ---
 name: Release
 
-on:
+'on':
   push:
     branches:
       - master
@@ -16,30 +16,41 @@ jobs:
       ready-for-release: ${{ steps.check.outputs.ready }}
       has-backend: ${{ steps.check.outputs.has_backend }}
       has-frontend: ${{ steps.check.outputs.has_frontend }}
+      backend-line: ${{ steps.check.outputs.backend_line }}
+      frontend-line: ${{ steps.check.outputs.frontend_line }}
     steps:
       - uses: actions/checkout@v4
-      
       - name: Check Release Readiness
         id: check
         run: |
           READY=true
-          
           # Check if we have anything to release
           if [ ! -d "backend" ] && [ ! -d "frontend" ]; then
             echo "Nothing to release yet"
             READY=false
           fi
-          
           # Check for production config
           if [ ! -f "docker-compose.prod.yml" ]; then
             echo "No production Docker Compose config"
             READY=false
           fi
-          
           echo "ready=$READY" >> $GITHUB_OUTPUT
-          echo "has_backend=$([ -d backend ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_frontend=$([ -d frontend ] && echo true || echo false)" >> $GITHUB_OUTPUT
-
+          HAS_BACKEND=$([ -d backend ] && echo true || echo false)
+          HAS_FRONTEND=$([ -d frontend ] && echo true || echo false)
+          echo "has_backend=$HAS_BACKEND" >> $GITHUB_OUTPUT
+          echo "has_frontend=$HAS_FRONTEND" >> $GITHUB_OUTPUT
+          if [ "$HAS_BACKEND" = "true" ]; then
+            BACKEND_LINE="- ✅ Backend (Django)"
+          else
+            BACKEND_LINE="- ❌ Backend not ready"
+          fi
+          if [ "$HAS_FRONTEND" = "true" ]; then
+            FRONTEND_LINE="- ✅ Frontend (React)"
+          else
+            FRONTEND_LINE="- ❌ Frontend not ready"
+          fi
+          echo "backend_line=$BACKEND_LINE" >> $GITHUB_OUTPUT
+          echo "frontend_line=$FRONTEND_LINE" >> $GITHUB_OUTPUT
   release:
     needs: check-readiness
     if: needs.check-readiness.outputs.ready-for-release == 'true'
@@ -56,14 +67,14 @@ jobs:
           name: Release v0.1.${{ github.run_number }}
           body: |
             ## 🚀 Initial Release v0.1.${{ github.run_number }}
-            
+
             ### Included Components
-            ${{ needs.check-readiness.outputs.has-backend == 'true' && '- ✅ Backend (Django)' || '- ❌ Backend not ready' }}
-            ${{ needs.check-readiness.outputs.has-frontend == 'true' && '- ✅ Frontend (React)' || '- ❌ Frontend not ready' }}
-            
+            ${{ needs.check-readiness.outputs.backend-line }}
+            ${{ needs.check-readiness.outputs.frontend-line }}
+
             ### Recent Changes
             ${{ github.event.head_commit.message }}
-            
+
             ### Deployment
             ```bash
             docker-compose -f docker-compose.prod.yml up -d

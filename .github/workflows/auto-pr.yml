@@ -1,7 +1,7 @@
 ---
 name: Auto Create Pull Request
 
-on:
+'on':
   push:
     branches:
       - 'feature/**'
@@ -25,39 +25,64 @@ jobs:
         id: target
         run: |
           BRANCH="${{ github.ref_name }}"
-          if [[ "$BRANCH" == feature/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
+          if [[ "$BRANCH" == feature/* ]]; then
             echo "target=develop" >> $GITHUB_OUTPUT
-          elif [[ "$BRANCH" == hotfix/* ]] || [[ "$BRANCH" == release/* ]]; then
+            echo "pr_type=Feature" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == bugfix/* ]]; then
+            echo "target=develop" >> $GITHUB_OUTPUT
+            echo "pr_type=Bugfix" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == hotfix/* ]]; then
             echo "target=master" >> $GITHUB_OUTPUT
+            echo "pr_type=Hotfix" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == release/* ]]; then
+            echo "target=master" >> $GITHUB_OUTPUT
+            echo "pr_type=Release" >> $GITHUB_OUTPUT
           else
             echo "target=develop" >> $GITHUB_OUTPUT
+            echo "pr_type=Release" >> $GITHUB_OUTPUT
           fi
 
       - name: Check if Target Branch Exists
         id: check-branch
         run: |
-          if git show-ref --verify --quiet refs/heads/${{ steps.target.outputs.target }}; then
+          TARGET="${{ steps.target.outputs.target }}"
+          if git show-ref --verify --quiet "refs/heads/$TARGET"; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Target branch '${{ steps.target.outputs.target }}' exists"
+            echo "✅ Target branch '$TARGET' exists"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Target branch '${{ steps.target.outputs.target }}' doesn't exist yet"
+            echo "⚠️ Target branch '$TARGET' doesn't exist yet"
           fi
+
+      - name: Collect Changes
+        if: steps.check-branch.outputs.exists == 'true'
+        id: changes
+        run: |
+          TARGET="${{ steps.target.outputs.target }}"
+          {
+            echo "list<<EOF"
+            git log "origin/$TARGET..HEAD" --pretty=format:"- %s" \
+              2>/dev/null || echo "New branch, no comparison available"
+            echo
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create PR (if target exists)
         if: steps.check-branch.outputs.exists == 'true'
         uses: repo-sync/pull-request@v2
         with:
           destination_branch: ${{ steps.target.outputs.target }}
-          pr_title: "${{ startsWith(github.ref, 'refs/heads/feature/') && 'Feature' || startsWith(github.ref, 'refs/heads/bugfix/') && 'Bugfix' || startsWith(github.ref, 'refs/heads/hotfix/') && 'Hotfix' || 'Release' }}: ${{ github.ref_name }}"
+          pr_title: "${{ steps.target.outputs.pr_type }}: \
+            ${{ github.ref_name }}"
           pr_body: |
             ## Automated PR
-            
-            Branch: `${{ github.ref_name }}` → `${{ steps.target.outputs.target }}`
-            
+
+            Branch: `${{ github.ref_name }}` →
+            `${{ steps.target.outputs.target }}`
+
             ### Changes
-            $(git log origin/${{ steps.target.outputs.target }}..HEAD --pretty=format:"- %s" 2>/dev/null || echo "New branch, no comparison available")
-            
+            ${{ steps.changes.outputs.list }}
+
             ### Checklist
             - [ ] Code follows project standards
             - [ ] Tests added/updated

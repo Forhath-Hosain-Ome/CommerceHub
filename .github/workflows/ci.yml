@@ -1,7 +1,7 @@
 ---
 name: CI Pipeline
 
-on:
+'on':
   pull_request:
     branches: [develop, master, main]
   push:
@@ -27,10 +27,10 @@ jobs:
       has-typescript: ${{ steps.check.outputs.typescript }}
       has-redis: ${{ steps.check.outputs.redis }}
       has-celery: ${{ steps.check.outputs.celery }}
-      
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Detect Project Structure
         id: check
         run: |
@@ -42,7 +42,7 @@ jobs:
             echo "backend=false" >> $GITHUB_OUTPUT
             echo "⚠️ No backend found yet"
           fi
-          
+
           # Frontend detection
           if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
             echo "frontend=true" >> $GITHUB_OUTPUT
@@ -51,7 +51,7 @@ jobs:
             echo "frontend=false" >> $GITHUB_OUTPUT
             echo "⚠️ No frontend found yet"
           fi
-          
+
           # Docker detection
           if [ -f "Dockerfile" ] || [ -f "docker-compose.yml" ]; then
             echo "docker=true" >> $GITHUB_OUTPUT
@@ -60,33 +60,38 @@ jobs:
             echo "docker=false" >> $GITHUB_OUTPUT
             echo "⚠️ No Docker config yet"
           fi
-          
+
           # Migrations detection
-          if [ -d "backend" ] && find backend -path "*/migrations/*.py" -not -name "__init__.py" | grep -q .; then
+          if [ -d "backend" ] && \
+             find backend -path "*/migrations/*.py" -not -name "__init__.py" \
+               | grep -q .; then
             echo "migrations=true" >> $GITHUB_OUTPUT
             echo "✅ Database migrations detected"
           else
             echo "migrations=false" >> $GITHUB_OUTPUT
             echo "⚠️ No migrations yet"
           fi
-          
+
           # Tests detection
-          if [ -d "backend" ] && find backend -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+          if [ -d "backend" ] && \
+             find backend -name "test_*.py" -o -name "*_test.py" \
+               | grep -q .; then
             echo "tests_backend=true" >> $GITHUB_OUTPUT
             echo "✅ Backend tests detected"
           else
             echo "tests_backend=false" >> $GITHUB_OUTPUT
             echo "⚠️ No backend tests yet"
           fi
-          
-          if [ -d "frontend" ] && grep -q "\"test\":" frontend/package.json 2>/dev/null; then
+
+          if [ -d "frontend" ] && \
+             grep -q "\"test\":" frontend/package.json 2>/dev/null; then
             echo "tests_frontend=true" >> $GITHUB_OUTPUT
             echo "✅ Frontend tests detected"
           else
             echo "tests_frontend=false" >> $GITHUB_OUTPUT
             echo "⚠️ No frontend tests yet"
           fi
-          
+
           # TypeScript detection
           if [ -f "frontend/tsconfig.json" ]; then
             echo "typescript=true" >> $GITHUB_OUTPUT
@@ -95,14 +100,14 @@ jobs:
             echo "typescript=false" >> $GITHUB_OUTPUT
             echo "ℹ️ JavaScript only"
           fi
-          
+
           # Redis/Celery detection
           if grep -q "redis" backend/requirements.txt 2>/dev/null; then
             echo "redis=true" >> $GITHUB_OUTPUT
           else
             echo "redis=false" >> $GITHUB_OUTPUT
           fi
-          
+
           if grep -q "celery" backend/requirements.txt 2>/dev/null; then
             echo "celery=true" >> $GITHUB_OUTPUT
           else
@@ -115,34 +120,36 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Basic File Structure Check
         run: |
           echo "Checking project structure..."
-          
+
           # Check for README
           if [ ! -f "README.md" ]; then
             echo "⚠️ No README.md found"
           fi
-          
+
           # Check for .gitignore
           if [ ! -f ".gitignore" ]; then
             echo "⚠️ No .gitignore found"
           fi
-          
+
           # Check for common patterns
           if [ -f ".env" ]; then
             echo "❌ .env file should not be committed!"
             exit 1
           fi
-          
+
       - name: Check File Sizes
         run: |
           # Warn about large files
-          find . -type f -size +5M -not -path "./.git/*" -not -path "*/node_modules/*" | while read file; do
-            echo "⚠️ Large file detected: $file ($(du -h "$file" | cut -f1))"
+          find . -type f -size +5M -not -path "./.git/*" \
+            -not -path "*/node_modules/*" | while read file; do
+            SIZE=$(du -h "$file" | cut -f1)
+            echo "⚠️ Large file detected: $file ($SIZE)"
           done
-          
+
       - name: YAML Lint
         if: hashFiles('**/*.yml') != '' || hashFiles('**/*.yaml') != ''
         uses: actionshub/yamllint@main
@@ -152,7 +159,7 @@ jobs:
     needs: [detect-structure, basic-quality]
     if: needs.detect-structure.outputs.has-backend == 'true'
     runs-on: ubuntu-22.04
-    
+
     services:
       postgres:
         image: postgres:15
@@ -194,7 +201,8 @@ jobs:
         working-directory: backend
         run: |
           if [ -f "manage.py" ]; then
-            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+            flake8 . --count --select=E9,F63,F7,F82 --show-source \
+              --statistics || true
           fi
 
       - name: Check Migrations
@@ -228,7 +236,7 @@ jobs:
     needs: [detect-structure, basic-quality]
     if: needs.detect-structure.outputs.has-frontend == 'true'
     runs-on: ubuntu-22.04
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -285,7 +293,7 @@ jobs:
       needs.backend.result != 'failure' &&
       needs.frontend.result != 'failure'
     runs-on: ubuntu-22.04
-    
+
     services:
       postgres:
         image: postgres:15
@@ -303,7 +311,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          
+
       - name: Install Backend
         working-directory: backend
         run: |
@@ -316,7 +324,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-          
+
       - name: Start Frontend
         working-directory: frontend
         run: |
@@ -326,5 +334,7 @@ jobs:
 
       - name: Health Check
         run: |
-          curl --retry 5 --retry-delay 5 --retry-connrefused http://localhost:8000/api/ || echo "Backend not ready yet"
-          curl --retry 5 --retry-delay 5 --retry-connrefused http://localhost:3000 || echo "Frontend not ready yet"
+          curl --retry 5 --retry-delay 5 --retry-connrefused \
+            http://localhost:8000/api/ || echo "Backend not ready yet"
+          curl --retry 5 --retry-delay 5 --retry-connrefused \
+            http://localhost:3000 || echo "Frontend not ready yet"
