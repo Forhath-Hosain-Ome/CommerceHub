@@ -1,3 +1,4 @@
+---
 name: 'Setup Frontend'
 description: 'Sets up Node.js and installs dependencies'
 inputs:
